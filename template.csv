@@ -1,0 +1,2 @@
+Date,Vendor,Description,Category,Cost type,Reference,Quantity,Duration,Unit,Unit price,Base amount,Tax treatment,Tax %,Tax adjustment,Billable amount,Payable amount,Paid amount,Notes
+2027-08-20,Example vendor,Replace this example,Manpower,LO payment recap,EXAMPLE-001,1,3,days,1000000,3000000,WHT gross-up,2.5,76923,3076923,3000000,0,Example only - delete before importing
