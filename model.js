@@ -9,7 +9,7 @@ export const now=()=>new Date().toISOString();
 export const fields=['category','costType','vendor','description','date','qty','duration','unit','price','baseAmount','taxType','taxPct','taxAmount','billable','payable','paid','reference','notes'];
 export const clone=v=>structuredClone(v);
 export const isInternal=e=>String(e?.costType??'').trim().toUpperCase()===INTERNAL;
-export function projectDefaults(name){return {id:uid(),name:name.trim().slice(0,120),demo:false,eventEnd:'',feePct:0,vatPct:0,advance:0,settingsConfirmed:false,budgets:Object.fromEntries(CATEGORIES.map(c=>[c,null])),previous:Object.fromEntries(CATEGORIES.map(c=>[c,null])),previousLabel:'Previous project',explanations:Object.fromEntries(CATEGORIES.map(c=>[c,''])),created:now()}}
+export function projectDefaults(name){return {id:uid(),name:name.trim().slice(0,120),demo:false,eventEnd:'',feePct:0,vatPct:0,advance:0,settingsConfirmed:false,previous:Object.fromEntries(CATEGORIES.map(c=>[c,null])),previousLabel:'Previous project',explanations:Object.fromEntries(CATEGORIES.map(c=>[c,''])),created:now()}}
 export function money(value,nullable=false){
  if(value===null||value===undefined||value===''){if(nullable)return null;throw Error('A required amount is missing. Enter 0 only for a genuine zero.')}
  if(typeof value==='boolean'||typeof value==='object')throw Error('Invalid amount');
@@ -52,5 +52,6 @@ export function decorate(data){data.categories=CATEGORIES;for(const e of data.ex
 export function finalReady(data){return data.expenses.length>0&&data.project.settingsConfirmed&&data.expenses.every(e=>!readiness(e,data.documents).length)}
 export function validateSettings(raw,old){const p={...old,name:String(raw.name||'').trim().slice(0,120),eventEnd:raw.eventEnd||'',settingsConfirmed:!!raw.settingsConfirmed,previousLabel:String(raw.previousLabel||'Previous project').slice(0,120)};
  if(!p.name)throw Error('Project name is required');if(p.eventEnd&&!validDate(p.eventEnd))throw Error('Invalid festival date');for(const k of ['feePct','vatPct','advance'])p[k]=money(raw[k]);if(p.feePct<0||p.feePct>100||p.vatPct<0||p.vatPct>100||p.advance<0)throw Error('Rates must be 0–100 and advances nonnegative');
- for(const k of ['budgets','previous'])p[k]=Object.fromEntries(CATEGORIES.map(c=>[c,money(raw[k]?.[c],true)]));p.explanations=Object.fromEntries(CATEGORIES.map(c=>[c,String(raw.explanations?.[c]||'').slice(0,1000)]));return p;
+ // Budgets were removed from the app on the owner's decision (26 Oct 2026); older masters' budget values are dropped.
+ delete p.budgets;p.previous=Object.fromEntries(CATEGORIES.map(c=>[c,money(raw.previous?.[c],true)]));p.explanations=Object.fromEntries(CATEGORIES.map(c=>[c,String(raw.explanations?.[c]||'').slice(0,1000)]));return p;
 }

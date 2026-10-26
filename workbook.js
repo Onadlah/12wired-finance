@@ -68,25 +68,25 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
   for(const k of NUMERIC)inputs.getColumn(col(k)).numFmt=AMOUNT;inputs.getColumn(col('taxPct')).numFmt=PCT;
  }
  const totals=Object.fromEntries(CATEGORIES.map(c=>[c,categorySheet(categories[c],c,es.filter(e=>e.category===c),data)]));
- summary.columns=[{width:30},{width:24},{width:24},{width:24},{width:18},{width:24},{width:24},{width:42}];
+ summary.columns=[{width:30},{width:24},{width:24},{width:24},{width:18},{width:42},{width:24}];
  summary.getCell('A1').value=p.name+' — COST RECAP & QUOTATION';summary.getCell('A1').font={bold:true,size:16,color:{argb:'FF263D30'}};
  summary.getCell('A2').value=(master?'WORKING MASTER':final?'FINAL':'DRAFT')+' · Artist hospitality · IDR';
- summary.getRow(4).values=['Category',p.previousLabel,'Current billable','Variance','Variance %','Approved budget','Budget variance','Explanation'];paint(summary.getRow(4));summary.getRow(4).height=undefined;
+ summary.getRow(4).values=['Category',p.previousLabel,'Current billable','Variance','Variance %','Explanation'];paint(summary.getRow(4));summary.getRow(4).height=undefined;
  const catL=inputs?.getColumn(col('category')).letter,billL=inputs?.getColumn(col('billable')).letter;
  let subtotal=0;
  for(let i=0;i<CATEGORIES.length;i++){
-  const c=CATEGORIES[i],row=5+i,bill=es.filter(e=>e.category===c).reduce((a,e)=>a+(e.billable||0),0),prev=p.previous[c],budget=p.budgets[c];subtotal+=bill;
+  const c=CATEGORIES[i],row=5+i,bill=es.filter(e=>e.category===c).reduce((a,e)=>a+(e.billable||0),0),prev=p.previous[c];subtotal+=bill;
   summary.getCell(`A${row}`).value=c;summary.getCell(`B${row}`).value=prev;
   formula(summary.getCell(`C${row}`),master?`SUMIF(Expenses!${catL}2:${catL}10001,A${row},Expenses!${billL}2:${billL}10001)`:`${quote(c)}!N${totals[c]}`,bill);
   formula(summary.getCell(`D${row}`),`IF(B${row}="","n.a.",C${row}-B${row})`,prev===null?'n.a.':bill-prev);
   formula(summary.getCell(`E${row}`),`IF(OR(B${row}="",B${row}=0),"n.a.",D${row}/B${row})`,!prev?'n.a.':(bill-prev)/prev);
-  summary.getCell(`F${row}`).value=budget;formula(summary.getCell(`G${row}`),`IF(F${row}="","n.a.",C${row}-F${row})`,budget===null?'n.a.':bill-budget);summary.getCell(`H${row}`).value=p.explanations[c];
+  summary.getCell(`F${row}`).value=p.explanations[c];
  }
  summary.getCell('A11').value='COST SUBTOTAL';formula(summary.getCell('C11'),'SUM(C5:C10)',subtotal);
  const fee=Math.round(subtotal*p.feePct)/100,vat=Math.round((subtotal+fee)*p.vatPct)/100,total=subtotal+fee+vat;
  for(const [row,label,text,value] of [[14,'Billable cost subtotal','C11',subtotal],[15,'Agency service fee','ROUND(C14*B15,2)',fee],[16,'VAT on costs + agency fee','ROUND(SUM(C14:C15)*B16,2)',vat],[17,'Grand total','SUM(C14:C16)',total],[18,'Less: promoter advances','-B18',-p.advance],[19,'TOTAL DUE','SUM(C17:C18)',total-p.advance]]){summary.getCell(`A${row}`).value=label;formula(summary.getCell(`C${row}`),text,value)}
  summary.getCell('B15').value=p.feePct/100;summary.getCell('B16').value=p.vatPct/100;summary.getCell('B18').value=p.advance;summary.getCell('B15').numFmt=summary.getCell('B16').numFmt='#,##0.0%';summary.getCell('B18').numFmt=AMOUNT;
- for(const c of ['B','C','D','F','G'])for(let row=5;row<=11;row++)summary.getCell(`${c}${row}`).numFmt=AMOUNT;
+ for(const c of ['B','C','D'])for(let row=5;row<=11;row++)summary.getCell(`${c}${row}`).numFmt=AMOUNT;
  for(let row=5;row<=10;row++)summary.getCell(`E${row}`).numFmt='#,##0.0%;(#,##0.0%)';for(let row=14;row<=19;row++)summary.getCell(`C${row}`).numFmt=AMOUNT;
  if(master||!final){
   summary.getCell('F14').value='Expense records';summary.getCell('G14').value=es.length;summary.getCell('G14').numFmt='#,##0';
@@ -101,7 +101,7 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
  if(!master)return new Uint8Array(await wb.xlsx.writeBuffer());
  style(settings,['Setting','Value','Instructions']);settings.getColumn(1).width=44;settings.getColumn(3).width=70;
  for(const [key,label] of [['name','Project name'],['eventEnd','Festival end date (optional, YYYY-MM-DD)'],['feePct','Agency service fee (%)'],['vatPct','VAT (%)'],['advance','Promoter advances (IDR)'],['previousLabel','Previous-project comparison label']])settings.addRow([key,p[key],label]);
- for(const c of CATEGORIES){settings.addRow(['budget:'+c,p.budgets[c],'Approved budget; blank means not supplied']);settings.addRow(['previous:'+c,p.previous[c],'Previous project total; blank means not supplied']);settings.addRow(['explanation:'+c,p.explanations[c],'Variance explanation'])}
+ for(const c of CATEGORIES){settings.addRow(['previous:'+c,p.previous[c],'Previous project total; blank means not supplied']);settings.addRow(['explanation:'+c,p.explanations[c],'Variance explanation'])}
  settings.getColumn(2).numFmt=AMOUNT;settings.getColumn(2).width=36;
  guide.getColumn(1).width=120;
  for(const line of ['12WIRED FINANCE PILOT','The master workbook is the project record. Supporting files are stored separately in this app’s Dropbox folder.','Edit the Expenses sheet for daily entries. Keep its headers, existing Expense IDs, and project/category names intact.','For new Excel rows, leave Expense ID blank; the app assigns one on the next save. Enter dates as YYYY-MM-DD.','Use numbers, not formulas, in Expenses and Project Settings. Category names must match the six report categories.','Cost type says how the cost was paid: Accounts payable, Company card (add the cardholder, e.g. Company card NY), Cash advance, LO payment recap, Direct receipt, Inventory, or 12WIRED.','Tax %: enter as a percentage, e.g. 2.5%. Tax adjustment is the amount in rupiah. For WHT gross-up, tax = base ÷ (1 − rate) − base, rounded to whole rupiah.','12WIRED rows are 12WIRED’s own manpower. Finance may leave their amounts blank; the project head fills them. They need no invoice, but the final report waits until each has a billable amount.','Edit only Expenses and Project Settings. Summary and category sheets are generated reports.','After editing Excel, save it and wait for Dropbox sync, then use Refresh from Dropbox in the app.','Changes to expense details clear their document check. Recheck the invoice or quotation in the app.','Changes to Project Settings clear finance’s settings confirmation. Confirm the settings again in the app.','If another copy changes during a save, the app stops. Refresh and review before retrying; it never silently overwrites.','Files uploaded from your phone are saved in Supporting Documents and referenced in this workbook.','Final reports require a cost type and a checked invoice or vendor quotation for every vendor cost, a filled amount on every 12WIRED row, and confirmed billing settings.','The promoter report contains Summary, category sheets and Source Register only. Payables, payments and settings stay in this master.','Submission timing is supervised manually by the project head.','Pilot limit: 2,000 expenses per project, 15 MB per attachment, and 10 MB for an edited master workbook.','Anyone with the address can open the app page, but each person sees only the files in the Dropbox account they sign in with. It requires internet access; it does not queue offline changes.'])guide.addRow([line]);
@@ -114,9 +114,9 @@ export async function readWorkbook(bytes){
  const allowed=['Summary',...CATEGORIES,'Source Register','Expenses','Project Settings','How to use','_12W App Data'];if(wb.worksheets.some(s=>!allowed.includes(s.name)))throw Error('This master contains extra sheets. Keep additional analysis in a separate workbook before using app saves.');
  const data={project:null,expenses:[],documents:[],history:[]},old=new Map();
  meta.eachRow((r,n)=>{if(n===1)return;const kind=r.getCell(1).value;const value=JSON.parse(String(r.getCell(2).value));if(kind==='project')data.project=value;if(kind==='document')data.documents.push(value);if(kind==='expense')old.set(value.id,value);if(kind==='history')data.history.push(value)});
- if(!data.project?.id)throw Error('Master project settings are missing');
+ if(!data.project?.id)throw Error('Master project settings are missing');delete data.project.budgets;
  const settings=wb.getWorksheet('Project Settings');if(!settings)throw Error('Project Settings sheet is missing');const settingsInput=structuredClone(data.project);
- settings.eachRow((r,n)=>{if(n===1)return;const key=String(cellValue(r.getCell(1))),value=cellValue(r.getCell(2));if(['name','eventEnd','feePct','vatPct','advance','previousLabel'].includes(key))settingsInput[key]=value;else if(key.startsWith('budget:'))settingsInput.budgets[key.slice(7)]=value;else if(key.startsWith('previous:'))settingsInput.previous[key.slice(9)]=value;else if(key.startsWith('explanation:'))settingsInput.explanations[key.slice(12)]=value});
+ settings.eachRow((r,n)=>{if(n===1)return;const key=String(cellValue(r.getCell(1))),value=cellValue(r.getCell(2));if(['name','eventEnd','feePct','vatPct','advance','previousLabel'].includes(key))settingsInput[key]=value;else if(key.startsWith('previous:'))settingsInput.previous[key.slice(9)]=value;else if(key.startsWith('explanation:'))settingsInput.explanations[key.slice(12)]=value});
  const updated=validateSettings(settingsInput,data.project);if(JSON.stringify(updated)!==JSON.stringify(data.project)){updated.settingsConfirmed=false;data.settingsEditedInExcel=true}data.project=updated;
  const s=wb.getWorksheet('Expenses');if(!s)throw Error('Expenses sheet is missing');if(s.rowCount>2001)throw Error('Pilot limit: 2,000 expenses per project');
  for(let i=0;i<HEADERS.length;i++)if(s.getRow(1).getCell(i+1).value!==HEADERS[i])throw Error('Keep the master Expenses column headers unchanged');
