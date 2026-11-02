@@ -191,6 +191,14 @@ textarea{resize:vertical;min-height:70px}
 .report-equation{display:grid;gap:10px}
 .report-equation div{display:flex;justify-content:space-between;gap:12px}
 .report-equation strong{font-weight:600;font-variant-numeric:tabular-nums}
+.activity{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.activity:last-child{border-bottom:0}
+.activity p{margin:0}
+.activity small{color:var(--muted);font-size:12px}
+.pill-dot{width:9px;height:9px;border-radius:50%;background:var(--orange);margin-top:7px;flex-shrink:0}
+.device-card{margin-top:20px}
+.device-card h2{margin-bottom:6px}
+.device-card button{margin-top:14px}
 .notes-table input{min-width:120px}
 .notes-table textarea{min-width:200px;min-height:42px;height:42px}
 
