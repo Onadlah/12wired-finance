@@ -305,3 +305,20 @@ dialog::backdrop{background:rgba(36,33,58,.55)}
  .connect-page{padding:40px 20px}
  .connect-page h1{font-size:38px}
 }
+
+/* Progress while the app talks to Dropbox */
+.busybar{position:fixed;inset:0 0 auto 0;z-index:1000;pointer-events:none}
+.busybar-line{display:block;height:4px;background:linear-gradient(90deg,transparent 0,var(--action) 30%,var(--marquee) 50%,var(--action) 70%,transparent 100%);background-size:50% 100%;background-repeat:no-repeat;animation:busy 1.1s linear infinite;background-color:rgba(200,70,31,.18)}
+.busybar-label{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font:600 13px/1 var(--text);padding:8px 14px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.18);white-space:nowrap}
+@keyframes busy{from{background-position:-50% 0}to{background-position:150% 0}}
+@media (prefers-reduced-motion:reduce){.busybar-line{animation:none;background:var(--action)}}
+html.is-busy dialog button,html.is-busy dialog input,html.is-busy dialog select,html.is-busy .fab,html.is-busy #syncDropbox{pointer-events:none;opacity:.55}
+.doc.pending{border-style:dashed}
+.doc.pending .quiet{flex:none}
+tr.just-saved td{animation:saved 3s ease-out}
+@keyframes saved{0%,40%{background:rgba(246,207,11,.35)}100%{background:transparent}}
+@media (max-width:760px){.modal-footer .actions{flex-wrap:wrap;justify-content:flex-end}#saveNext{order:-1}}
+
+[hidden]{display:none!important}
+dialog .busybar-label{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 104px)}
+.next-note{margin-bottom:18px}
