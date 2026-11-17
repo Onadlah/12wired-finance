@@ -1,4 +1,4 @@
-import {CATEGORIES,fields,contentHash,version,validateExpense,decorate,uid,validDate,validateSettings,isInternal} from './model.js';
+import {CATEGORIES,fields,contentHash,version,validateExpense,decorate,uid,validDate,validateSettings,isInternal,taxFromRate} from './model.js';
 // Master input sheet. Finance may edit these columns directly in Excel.
 const HEADERS=['Expense ID','Category','Cost type','Date','Vendor / team','Description','Quantity','Duration','Unit','Unit price','Base amount','Tax treatment','Tax %','Tax adjustment','Billable amount','Payable amount','Paid amount','Reference','Notes','Supporting files (app managed)','Document status (app managed)'];
 const KEYS=['id','category','costType','date','vendor','description','qty','duration','unit','price','baseAmount','taxType','taxPct','taxAmount','billable','payable','paid','reference','notes'];
@@ -22,12 +22,44 @@ function formula(cell,text,result){cell.value={formula:text,result}}
 // Print each report sheet landscape, one page wide, so a PDF or printout keeps all columns together.
 function printable(s){s.pageSetup={orientation:'landscape',paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}}
 function docNames(e,data){return e.documents.map(id=>data.documents.find(d=>d.id===id)?.name).filter(Boolean)}
-function metaRows(wb,data){
+// Report sheets (Summary, category sheets, Source Register) are made by the app from Expenses. People sometimes
+// type in a category sheet anyway. To spot that without confusing it with normal Expenses edits, each save
+// records which rows it wrote into each category sheet (vendor | description | billable).
+const norm=v=>String(v??'').replace(/\s+/g,' ').trim().toLowerCase();
+const amt=v=>typeof v==='number'?String(Math.round(v)):String(v??'').replace(/[^0-9.-]/g,'');
+export const rowKey=(vendor,description,billable)=>norm(vendor)+'|'+norm(description)+'|'+amt(billable);
+function plain(c){const v=c.value;if(v===null||v===undefined)return '';if(v instanceof Date)return v;if(typeof v==='object'){if('result'in v)return v.result??'';if(v.richText)return v.richText.map(x=>x.text).join('');if(v.text!==undefined)return v.text;return ''}return v}
+function reportRows(s){const rows=[];for(let r=HEAD+1;r<=s.rowCount;r++){const cells=Array.from({length:16},(_,i)=>plain(s.getRow(r).getCell(i+1)));if(String(cells[3]).trim().toUpperCase()==='CATEGORY TOTAL')continue;if(cells.every(v=>v===''))continue;rows.push({row:r,cells})}return rows}
+function rawFromReportRow(cat,c){
+ const [costType,date,vendor,description,qty,duration,unit,price,base,taxType,taxPct,taxAmount,,billable,src,notes]=c;
+ const num=v=>v===''||v===null||v===undefined?null:v,b=num(base),t=num(taxAmount);
+ const pct=typeof taxPct==='number'?Math.round(taxPct*1e8)/1e6:num(taxPct);
+ const payable=/gross/i.test(String(taxType))?b:typeof b==='number'?b+(typeof t==='number'?t:0):num(billable);
+ return {category:cat,costType:String(costType||'').trim(),date:date instanceof Date?date.toISOString().slice(0,10):String(date||'').trim(),vendor:String(vendor||'').trim(),description:String(description||'').trim(),qty:num(qty),duration:num(duration),unit:String(unit||''),price:num(price),baseAmount:b,taxType:String(taxType||''),taxPct:pct,taxAmount:t===null?0:t,billable:num(billable),payable,paid:0,reference:String(src||'').split(' | ')[0].trim(),notes:String(notes||'')};
+}
+function findSheetEdits(wb,data,stored){
+ const out=[];
+ for(const cat of CATEGORIES){const s=wb.getWorksheet(cat);if(!s)continue;
+  const current=reportRows(s).map(x=>({...x,key:rowKey(x.cells[2],x.cells[3],x.cells[13])}));
+  // Masters saved before this record existed: compare with Expenses rows that were not changed in Excel.
+  const reference=stored?(stored[cat]||[]):data.expenses.filter(e=>e.category===cat&&!e.editedInExcel&&!String(e.id).startsWith('excel-')).map(e=>({id:e.id,key:rowKey(e.vendor,e.description,e.billable)}));
+  const pool=new Map();for(const r of reference){if(!pool.has(r.key))pool.set(r.key,[]);pool.get(r.key).push(r)}
+  const typed=[];for(const r of current){const list=pool.get(r.key);if(list&&list.length)list.shift();else typed.push(r)}
+  const removed=[...pool.values()].flat().map(r=>data.expenses.find(e=>e.id===r.id)).filter(Boolean).map(e=>({id:e.id,vendor:e.vendor,description:e.description,billable:e.billable}));
+  const added=typed.map(r=>{const raw=rawFromReportRow(cat,r.cells);let error='',warning='';try{validateExpense(raw,data.project.id)}catch(err){error=err.message}
+   if(!error&&['WHT gross-up','VAT added'].includes(raw.taxType)&&typeof raw.baseAmount==='number'&&typeof raw.taxPct==='number'&&typeof raw.taxAmount==='number'){const expected=taxFromRate(raw.baseAmount,raw.taxPct,raw.taxType);if(Math.abs(expected-raw.taxAmount)>1)warning=`Tax % ${raw.taxPct} does not match the tax amount. Check the tax % after copying.`}
+   return {ref:cat+':'+r.row,row:r.row,raw,error,warning}});
+  if(added.length||removed.length)out.push({sheet:cat,added,removed});
+ }
+ return out;
+}
+function metaRows(wb,data,sheets=null){
  const s=wb.addWorksheet('_12W App Data',{state:'veryHidden'});
  s.addRow(['12WIRED_FINANCE_MASTER',1]);s.addRow(['project',JSON.stringify(data.project)]);
  for(const d of data.documents)s.addRow(['document',JSON.stringify(d)]);
- for(const e of data.expenses)s.addRow(['expense',JSON.stringify({id:e.id,documents:e.documents,documentChecked:e.documentChecked,source:e.source,sourceKey:e.sourceKey,contentHash:e.contentHash,updated:e.updated})]);
+ for(const e of data.expenses)s.addRow(['expense',JSON.stringify({id:e.id,documents:e.documents,documentChecked:e.documentChecked,source:e.source,sourceKey:e.sourceKey,contentHash:e.contentHash,updated:e.updated,...(sheets?{sheet:e.category,sheetKey:rowKey(e.vendor,e.description,e.billable)}:{})})]);
  for(const h of data.history.slice(0,100))s.addRow(['history',JSON.stringify(h)]);
+ if(sheets)s.addRow(['sheets',1]);
 }
 // One category detail sheet: title, comparison line, then the cost rows and a total row.
 function categorySheet(s,cat,es,data){
@@ -108,15 +140,19 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
  settings.getColumn(2).numFmt=AMOUNT;settings.getColumn(2).width=36;
  guide.getColumn(1).width=120;
  for(const line of ['12WIRED FINANCE PILOT','The master workbook is the project record. Supporting files are stored separately in this app’s Dropbox folder.','Edit the Expenses sheet for daily entries. Keep its headers, existing Expense IDs, and project/category names intact.','For new Excel rows, leave Expense ID blank; the app assigns one on the next save. Enter dates as YYYY-MM-DD.','Use numbers, not formulas, in Expenses and Project Settings. Category names must match the six report categories.','Cost type says how the cost was paid: Accounts payable, Company card (add the cardholder, e.g. Company card NY), Cash advance, LO payment recap, Direct receipt, Inventory, or 12WIRED.','Tax %: enter as a percentage, e.g. 2.5%. Tax adjustment is the amount in rupiah. For WHT gross-up, tax = base ÷ (1 − rate) − base, rounded to whole rupiah.','12WIRED rows are 12WIRED’s own manpower. Finance may leave their amounts blank; the project head fills them. They need no invoice, but the final report waits until each has a billable amount.','Edit only Expenses and Project Settings. Summary and category sheets are generated reports.','After editing Excel, save it and wait for Dropbox sync, then use Refresh from Dropbox in the app.','Changes to expense details clear their document check. Recheck the invoice or quotation in the app.','Changes to Project Settings clear finance’s settings confirmation. Confirm the settings again in the app.','If another copy changes during a save, the app stops. Refresh and review before retrying; it never silently overwrites.','Files uploaded from your phone are saved in this event’s FINANCE folder: invoices, receipts and payment proof in Invoices and Receipts, quotations in Quotations. Reports go to Reports.','Final reports require a cost type and a checked invoice or vendor quotation for every vendor cost, a filled amount on every 12WIRED row, and confirmed billing settings.','The promoter report contains Summary, category sheets and Source Register only. Budgets, payables, payments and settings stay in this master.','Submission timing is supervised manually by the project head.','Pilot limit: 2,000 expenses per project, 15 MB per attachment, and 10 MB for an edited master workbook.','Anyone with the address can open the app page, but each person signs in with their own 12WIRED Dropbox account and sees only the FINANCE folders they are allowed to open. It requires internet access; it does not queue offline changes.'])guide.addRow([line]);
- metaRows(wb,data);return new Uint8Array(await wb.xlsx.writeBuffer());
+ // Master only: report sheets get a note and an Excel lock without a password, so typing goes to Expenses.
+ const note='Made by the app from the Expenses sheet. Type changes in Expenses, not here.';
+ for(const c of CATEGORIES){const cell=categories[c].getCell('A2');cell.value=note;cell.font={italic:true,color:{argb:'FF625E79'}}}
+ for(const sheet of [summary,...Object.values(categories),register])await sheet.protect('',{selectLockedCells:true,selectUnlockedCells:true,formatColumns:true,formatRows:true,autoFilter:true});
+ metaRows(wb,data,true);return new Uint8Array(await wb.xlsx.writeBuffer());
 }
 export async function readWorkbook(bytes){
  if(bytes.byteLength>10*1024*1024)throw Error('The master workbook exceeds the 10 MB pilot limit');
  const wb=new globalThis.ExcelJS.Workbook();await wb.xlsx.load(bytes);const meta=wb.getWorksheet('_12W App Data');
  if(!meta||meta.getCell('A1').value!=='12WIRED_FINANCE_MASTER'||meta.getCell('B1').value!==1)throw Error('This file is not a supported 12WIRED master workbook');
  const allowed=['Summary',...CATEGORIES,'Source Register','Expenses','Project Settings','How to use','_12W App Data'];if(wb.worksheets.some(s=>!allowed.includes(s.name)))throw Error('This master contains extra sheets. Keep additional analysis in a separate workbook before using app saves.');
- const data={project:null,expenses:[],documents:[],history:[]},old=new Map();
- meta.eachRow((r,n)=>{if(n===1)return;const kind=r.getCell(1).value;const value=JSON.parse(String(r.getCell(2).value));if(kind==='project')data.project=value;if(kind==='document')data.documents.push(value);if(kind==='expense')old.set(value.id,value);if(kind==='history')data.history.push(value)});
+ const data={project:null,expenses:[],documents:[],history:[]},old=new Map();let storedSheets=null;
+ meta.eachRow((r,n)=>{if(n===1)return;const kind=r.getCell(1).value;const value=JSON.parse(String(r.getCell(2).value));if(kind==='project')data.project=value;if(kind==='document')data.documents.push(value);if(kind==='expense')old.set(value.id,value);if(kind==='sheets')storedSheets={};if(kind==='history')data.history.push(value)});
  if(!data.project?.id)throw Error('Master project settings are missing');
  // Masters saved by the short-lived no-budget version (26 Oct 2026) have no budgets: start them blank.
  if(!data.project.budgets)data.project.budgets=Object.fromEntries(CATEGORIES.map(c=>[c,null]));
@@ -136,6 +172,8 @@ export async function readWorkbook(bytes){
   e.contentHash=await contentHash(e);e.documentChecked=!!prior?.documentChecked&&prior.contentHash===e.contentHash;e.version=await version(e);if(prior&&prior.contentHash!==e.contentHash)e.editedInExcel=true;
   data.expenses.push(e);
  }
+ if(storedSheets)for(const v of old.values())if(v.sheet){(storedSheets[v.sheet]=storedSheets[v.sheet]||[]).push({id:v.id,key:v.sheetKey})}
+ data.sheetEdits=findSheetEdits(wb,data,storedSheets);
  return decorate(data);
 }
 export async function readUpload(name,bytes){

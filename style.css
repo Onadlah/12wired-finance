@@ -322,3 +322,6 @@ tr.just-saved td{animation:saved 3s ease-out}
 [hidden]{display:none!important}
 dialog .busybar-label{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 104px)}
 .next-note{margin-bottom:18px}
+.sheet-row{align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);margin:0}
+.sheet-row small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+#sheetsForm h3{margin-top:18px}

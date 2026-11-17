@@ -18,6 +18,9 @@ async function access(p,fresh=false){const c=accessCache.get(p.id);if(!fresh&&c&
 async function load(key){const p=find(key),{bytes,meta}=await dbx.download(masterPath(p));const data=await readWorkbook(bytes);Object.assign(data,{revision:meta.rev,path:p.path,key,event:p.event,year:p.year,access:await access(p)});const who=await dbx.whoAmI();data.account={name:who.name,email:who.email};cache.set(key,data);return clone(data)}
 async function unchanged(key,expected){const data=await load(key);if(!expected||data.revision!==expected)throw Error('This master changed in Dropbox. Your changes were not saved. Close this form, refresh from Dropbox and review the latest values before retrying.');return data}
 async function save(data,message){if(data.expenses.length>MAX)throw Error('Pilot limit: 2,000 expenses per project');data.history.unshift({at:now(),message});data.history=data.history.slice(0,100);const bytes=await buildWorkbook(data);const meta=await dbx.upload(masterPath(data),bytes,data.revision);data.revision=meta.rev;cache.set(data.key,clone(decorate(data)));return data}
+// Rows typed into a report sheet in Excel would be wiped when the app rebuilds that sheet, so saving pauses
+// until someone reviews them (copy into Expenses, or let them go).
+function pausedBySheets(data){const names=data.sheetEdits.map(x=>x.sheet).join(', ');return `Someone typed in the ${names} sheet in Excel. Saving is paused so those rows are not lost. Open Overview and review them first.`}
 function expense(data,id,v){const e=data.expenses.find(e=>e.id===id);if(!e||e.version!==v)throw Error('This expense changed. Refresh and reopen it before saving.');return e}
 const ownDocument=(data,d)=>{try{return dbx.documentPath(data.path,d.path)}catch{throw Error('Supporting document '+d.name+' is outside this event’s FINANCE folder. Reattach it.')}};
 export async function api(route,r){
@@ -56,6 +59,17 @@ async function action(route,r){
   }obj.rows=out;obj.sheet=r.sheet;obj.revision=data.revision;return {rows:out};
  }
  const data=await unchanged(r.project,route==='import/commit'?imports.get(r.id)?.revision:r.revision);
+ if(data.sheetEdits?.length&&route!=='sheets/resolve')throw Error(pausedBySheets(data));
+ if(route==='sheets/resolve'){
+  const edits=data.sheetEdits||[];if(!edits.length)throw Error('Nothing to review: the report sheets match the Expenses sheet.');
+  const add=new Set(Array.isArray(r.add)?r.add:[]),remove=new Set(Array.isArray(r.remove)?r.remove:[]),rows=edits.flatMap(x=>x.added),removable=new Set(edits.flatMap(x=>x.removed.map(y=>y.id)));
+  for(const ref of add)if(!rows.some(x=>x.ref===ref))throw Error('That sheet changed. Refresh and review again.');
+  for(const id of remove)if(!removable.has(id))throw Error('That expense cannot be removed here.');
+  let copied=0;for(const x of rows){if(!add.has(x.ref))continue;if(x.error)throw Error(`Row ${x.row} of the ${x.raw.category} sheet cannot be copied: ${x.error}`);const e=validateExpense(x.raw,data.project.id);e.source=`Typed in the ${x.raw.category} sheet`;e.documentChecked=false;e.version=await version(e);data.expenses.push(e);copied++}
+  data.expenses=data.expenses.filter(e=>!remove.has(e.id));data.sheetEdits=[];const dropped=rows.length-copied;
+  await save(data,`Reviewed rows typed in the report sheets: copied ${copied} into Expenses`+(remove.size?`, removed ${remove.size} from Expenses`:'')+(dropped?`, left out ${dropped}`:''));
+  return {copied,removed:remove.size,dropped};
+ }
  if(route==='project/save'){data.project=validateSettings(r.values,data.project);await save(data,'Updated project settings');return data.project}
  if(route==='expense/save'){
   const raw=r.expense,old=raw.id?expense(data,raw.id,raw.version):null;const e=validateExpense(raw,data.project.id,old);
@@ -91,7 +105,7 @@ async function storeDocument(data,e,f){
  d={id,project:data.project.id,name:String(f.name||'document').slice(0,200),kind:f.kind,size:bytes.length,sha256,path:rel,created:now()};data.documents.push(d);return d}
 function parseDate(value){const s=String(value||'').trim();const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);return m?`${m[3].length===2?'20'+m[3]:m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`:s}
 const stamp=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join('.')}`;
-export async function exportReportFile(key,revision,final){if(writing)throw Error('Wait for the current save to finish');writing=true;try{const data=await unchanged(key,revision);if(final&&!finalReady(data))throw Error('Final report blocked: every vendor cost needs a cost type and a checked invoice or quotation, every 12WIRED row needs its amount from the project head, and billing settings must be confirmed.');if(final){const evidence=data.documents.filter(d=>['Invoice','Quotation'].includes(d.kind)&&data.expenses.some(e=>e.documents.includes(d.id)));for(const d of evidence){const path=ownDocument(data,d);try{const meta=await dbx.rpc('files/get_metadata',{path});if(meta['.tag']!=='file')throw Error('Not a file')}catch{throw Error('Supporting document unavailable in Dropbox: '+d.name+'. Reattach it before final export.')}}}const bytes=await buildWorkbook(data,{master:false,final});const filename=`${dbx.fileName(data.project.name)} - ${final?'Final':'Draft'} report - ${stamp()}.xlsx`;await dbx.upload(data.path+'/'+dbx.SUBFOLDERS.reports+'/'+filename,bytes);return {bytes,filename}}finally{writing=false}}
+export async function exportReportFile(key,revision,final){if(writing)throw Error('Wait for the current save to finish');writing=true;try{const data=await unchanged(key,revision);if(data.sheetEdits?.length)throw Error(pausedBySheets(data));if(final&&!finalReady(data))throw Error('Final report blocked: every vendor cost needs a cost type and a checked invoice or quotation, every 12WIRED row needs its amount from the project head, and billing settings must be confirmed.');if(final){const evidence=data.documents.filter(d=>['Invoice','Quotation'].includes(d.kind)&&data.expenses.some(e=>e.documents.includes(d.id)));for(const d of evidence){const path=ownDocument(data,d);try{const meta=await dbx.rpc('files/get_metadata',{path});if(meta['.tag']!=='file')throw Error('Not a file')}catch{throw Error('Supporting document unavailable in Dropbox: '+d.name+'. Reattach it before final export.')}}}const bytes=await buildWorkbook(data,{master:false,final});const filename=`${dbx.fileName(data.project.name)} - ${final?'Final':'Draft'} report - ${stamp()}.xlsx`;await dbx.upload(data.path+'/'+dbx.SUBFOLDERS.reports+'/'+filename,bytes);return {bytes,filename}}finally{writing=false}}
 export async function documentFile(key,id){const data=cache.get(key);const d=data?.documents.find(x=>x.id===id);if(!d)throw Error('Document not found. Refresh first.');return {bytes:(await dbx.download(ownDocument(data,d))).bytes,filename:d.name}}
 export async function masterFile(key){const p=find(key);return {bytes:(await dbx.download(masterPath(p))).bytes,filename:dbx.MASTER}}
 export async function folderAccess(key){return access(find(key),true)}
