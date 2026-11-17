@@ -16,7 +16,7 @@ const LOGO='<img class="logo" src="brand/logo.png" alt="12WIRED" width="640" hei
 const refreshIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>';
 let projects=[],state=null,view='overview',search='',filter='',category='',upload=null,preview=null;
 let current=localStorage.getItem('12wired-mobile-project');
-const APP_VERSION='2026-11-17.1';
+const APP_VERSION='2026-11-17.2';
 let busyCount=0,importDocs=[];
 function busy(label){busyCount++;document.documentElement.classList.add('is-busy');const m=$('#modal'),hosts=m&&m.open?[m]:[document.body];for(const host of hosts){let b=host.querySelector(':scope>.busybar');if(!b){b=document.createElement('div');b.className='busybar';b.setAttribute('role','status');b.innerHTML='<span class="busybar-line"></span><span class="busybar-label"></span>';host.prepend(b)}b.querySelector('.busybar-label').textContent=label}return ()=>{busyCount=Math.max(0,busyCount-1);if(!busyCount){document.documentElement.classList.remove('is-busy');document.querySelectorAll('.busybar').forEach(x=>x.remove())}}}
 async function withBusy(label,work){const done=busy(label);try{return await work()}finally{done()}}
