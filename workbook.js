@@ -22,13 +22,19 @@ function formula(cell,text,result){cell.value={formula:text,result}}
 // Print each report sheet landscape, one page wide, so a PDF or printout keeps all columns together.
 function printable(s){s.pageSetup={orientation:'landscape',paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}}
 function docNames(e,data){return e.documents.map(id=>data.documents.find(d=>d.id===id)?.name).filter(Boolean)}
+// Master only: file names link to the file in Dropbox. The link opens only for people who are signed in to
+// Dropbox and can open this FINANCE folder, so it shares nothing. One cell holds one link: the invoice comes first.
+const KIND_ORDER=['Invoice','Quotation','Payment evidence','Other'];
+function docLink(d,data){if(!d||!data.path||!d.path||String(d.path).startsWith('/'))return null;return 'https://www.dropbox.com/preview'+(data.path+'/'+d.path).split('/').filter(Boolean).map(x=>'/'+encodeURIComponent(x)).join('')}
+function firstDoc(e,data){return e.documents.map(id=>data.documents.find(d=>d.id===id)).filter(Boolean).sort((a,b)=>KIND_ORDER.indexOf(a.kind)-KIND_ORDER.indexOf(b.kind))[0]||null}
+function link(cell,text,d,data){const url=docLink(d,data);if(!text||!url)return;cell.value={text:String(text),hyperlink:url,tooltip:'Open '+d.name+' in Dropbox'};cell.font={color:{argb:'FF0563C1'},underline:true}}
 // Report sheets (Summary, category sheets, Source Register) are made by the app from Expenses. People sometimes
 // type in a category sheet anyway. To spot that without confusing it with normal Expenses edits, each save
 // records which rows it wrote into each category sheet (vendor | description | billable).
 const norm=v=>String(v??'').replace(/\s+/g,' ').trim().toLowerCase();
 const amt=v=>typeof v==='number'?String(Math.round(v)):String(v??'').replace(/[^0-9.-]/g,'');
 export const rowKey=(vendor,description,billable)=>norm(vendor)+'|'+norm(description)+'|'+amt(billable);
-function plain(c){const v=c.value;if(v===null||v===undefined)return '';if(v instanceof Date)return v;if(typeof v==='object'){if('result'in v)return v.result??'';if(v.richText)return v.richText.map(x=>x.text).join('');if(v.text!==undefined)return v.text;return ''}return v}
+function plain(c){const v=c.value;if(v===null||v===undefined)return '';if(v instanceof Date)return v;if(typeof v==='object'){if('result'in v)return v.result??'';if(v.richText)return v.richText.map(x=>x.text).join('');if(v.text!==undefined)return v.text?.richText?v.text.richText.map(x=>x.text).join(''):v.text;return ''}return v}
 function reportRows(s){const rows=[];for(let r=HEAD+1;r<=s.rowCount;r++){const cells=Array.from({length:16},(_,i)=>plain(s.getRow(r).getCell(i+1)));if(String(cells[3]).trim().toUpperCase()==='CATEGORY TOTAL')continue;if(cells.every(v=>v===''))continue;rows.push({row:r,cells})}return rows}
 function rawFromReportRow(cat,c){
  const [costType,date,vendor,description,qty,duration,unit,price,base,taxType,taxPct,taxAmount,,billable,src,notes]=c;
@@ -62,7 +68,7 @@ function metaRows(wb,data,sheets=null){
  if(sheets)s.addRow(['sheets',1]);
 }
 // One category detail sheet: title, comparison line, then the cost rows and a total row.
-function categorySheet(s,cat,es,data){
+function categorySheet(s,cat,es,data,links=false){
  const p=data.project;REPORT_WIDTHS.forEach((w,i)=>s.getColumn(i+1).width=w);
  s.getCell('A1').value=cat.toUpperCase();s.getCell('A1').font={bold:true,size:14,color:{argb:'FF263D30'}};
  s.getRow(HEAD).values=REPORT;paint(s.getRow(HEAD));s.views=[{state:'frozen',ySplit:HEAD}];s.autoFilter={from:{row:HEAD,column:1},to:{row:HEAD,column:REPORT.length}};
@@ -71,6 +77,7 @@ function categorySheet(s,cat,es,data){
   r++;const row=s.getRow(r);const blank=isInternal(e)&&e.billable===null;
   const src=[e.reference,...docNames(e,data)].filter(Boolean).join(' | ');
   row.values=[e.costType||'',e.date||'',e.vendor,e.description,e.qty,e.duration,e.unit,e.price,e.baseAmount,e.taxType,e.taxPct===null||e.taxPct===undefined?null:e.taxPct/100,e.taxAmount,null,e.billable,src,e.notes||(blank?'To be filled by the project head':'')];
+  if(links)link(row.getCell(15),src,firstDoc(e,data),data);
   if(e.baseAmount!==null||e.taxAmount!==null)formula(row.getCell(13),`I${r}+L${r}`,(e.baseAmount||0)+(e.taxAmount||0));
   for(const c of [5,6,8,9,12,13,14])row.getCell(c).numFmt=AMOUNT;row.getCell(11).numFmt=PCT;
   sum.base+=e.baseAmount||0;sum.tax+=e.taxAmount||0;sum.total+=(e.baseAmount||0)+(e.taxAmount||0);sum.bill+=e.billable||0;
@@ -96,7 +103,7 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
  const inputs=master?wb.addWorksheet('Expenses'):null,settings=master?wb.addWorksheet('Project Settings'):null,guide=master?wb.addWorksheet('How to use'):null;
  if(inputs){
   style(inputs,HEADERS);inputs.getColumn(col('id')).width=38;inputs.getColumn(col('description')).width=48;inputs.getColumn(HEADERS.length-1).width=48;inputs.getColumn(HEADERS.length).width=45;
-  for(const e of es)inputs.addRow([...KEYS.map(k=>k==='taxPct'?(e.taxPct===null||e.taxPct===undefined?null:e.taxPct/100):e[k]??null),docNames(e,data).join('; '),e.issues.join('; ')||(isInternal(e)?'12WIRED row filled':'Supported and checked')]);
+  for(const e of es){const row=inputs.addRow([...KEYS.map(k=>k==='taxPct'?(e.taxPct===null||e.taxPct===undefined?null:e.taxPct/100):e[k]??null),docNames(e,data).join('; '),e.issues.join('; ')||(isInternal(e)?'12WIRED row filled':'Supported and checked')]);link(row.getCell(HEADERS.length-1),docNames(e,data).join('; '),firstDoc(e,data),data)}
   for(const k of NUMERIC)inputs.getColumn(col(k)).numFmt=AMOUNT;inputs.getColumn(col('taxPct')).numFmt=PCT;
   // Dropdowns and number checks for people typing in Excel. They cover the filled rows plus 500 spare rows.
   // The app applies the same rules when it reads the sheet, so Excel only catches mistakes earlier.
@@ -110,7 +117,7 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
   for(const k of ['qty','duration','price'])rule(k,{type:'decimal',operator:'greaterThanOrEqual',formulae:[0],errorStyle:'stop',errorTitle:'Number',error:'Type a number of 0 or more, without text.'});
   for(const k of ['baseAmount','taxAmount','billable','payable','paid'])rule(k,{type:'decimal',operator:'between',formulae:[-1e12,1e12],errorStyle:'stop',errorTitle:'Amount',error:'Type the amount as a number only, without Rp.'});
  }
- const totals=Object.fromEntries(CATEGORIES.map(c=>[c,categorySheet(categories[c],c,es.filter(e=>e.category===c),data)]));
+ const totals=Object.fromEntries(CATEGORIES.map(c=>[c,categorySheet(categories[c],c,es.filter(e=>e.category===c),data,master)]));
  // The budget is internal (owner decision, 26 Oct 2026): it appears in the master and the app, never in promoter reports.
  const budgetCols=master;
  summary.columns=budgetCols?[{width:30},{width:24},{width:24},{width:24},{width:18},{width:24},{width:24},{width:42}]:[{width:30},{width:24},{width:24},{width:24},{width:18},{width:42},{width:24}];
@@ -141,7 +148,7 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
  if(master){summary.getCell('A22').value='Edit Expenses and Project Settings, then save Excel and click Refresh from Dropbox in the app.';summary.getCell('A23').value='Category detail sheets and document checks are refreshed when the app saves the master.'}
  style(register,['No.','Document','Type','Expense references','Dropbox location']);register.getColumn(2).width=48;register.getColumn(4).width=55;register.getColumn(5).width=70;
  const finance=String(data.path||'').split('/').pop(),location=d=>d.path.startsWith('/')?'/Apps/12WIRED Finance Pilot'+d.path:(finance?finance+'/':'')+d.path;
- const seen=new Set();for(const d of data.documents){if(seen.has(d.sha256)||!es.some(e=>e.documents.includes(d.id)))continue;seen.add(d.sha256);register.addRow([seen.size,d.name,d.kind,es.filter(e=>e.documents.includes(d.id)).map(e=>e.reference||e.description).join('; '),location(d)])}
+ const seen=new Set();for(const d of data.documents){if(seen.has(d.sha256)||!es.some(e=>e.documents.includes(d.id)))continue;seen.add(d.sha256);const row=register.addRow([seen.size,d.name,d.kind,es.filter(e=>e.documents.includes(d.id)).map(e=>e.reference||e.description).join('; '),location(d)]);if(master)link(row.getCell(5),location(d),d,data)}
  register.getColumn(1).numFmt='#,##0';
  for(const s of [summary,register,...Object.values(categories)])printable(s);
  if(!master)return new Uint8Array(await wb.xlsx.writeBuffer());
@@ -150,7 +157,7 @@ export async function buildWorkbook(data,{final=false,master=true}={}){
  for(const c of CATEGORIES){settings.addRow(['budget:'+c,p.budgets[c],'Approved budget; blank means not supplied']);settings.addRow(['previous:'+c,p.previous[c],'Previous project total; blank means not supplied']);settings.addRow(['explanation:'+c,p.explanations[c],'Variance explanation'])}
  settings.getColumn(2).numFmt=AMOUNT;settings.getColumn(2).width=36;
  guide.getColumn(1).width=120;
- for(const line of ['12WIRED FINANCE PILOT','The master workbook is the project record. Supporting files are stored separately in this app’s Dropbox folder.','Edit the Expenses sheet for daily entries. Keep its headers, existing Expense IDs, and project/category names intact.','For new Excel rows, leave Expense ID blank; the app assigns one on the next save. Enter dates as YYYY-MM-DD.','Use numbers, not formulas, in Expenses and Project Settings. Category, Cost type and Tax treatment have dropdown lists; amount columns accept numbers only.','Cost type says how the cost was paid: Accounts payable, Company card (add the cardholder, e.g. Company card NY), Cash advance, LO payment recap, Direct receipt, Inventory, or 12WIRED.','Tax %: enter as a percentage, e.g. 2.5%. Tax adjustment is the amount in rupiah. For WHT gross-up, tax = base ÷ (1 − rate) − base, rounded to whole rupiah.','12WIRED rows are 12WIRED’s own manpower. Finance may leave their amounts blank; the project head fills them. They need no invoice, but the final report waits until each has a billable amount.','Edit only Expenses and Project Settings. Summary and category sheets are generated reports.','After editing Excel, save it and wait for Dropbox sync, then use Refresh from Dropbox in the app.','Changes to expense details clear their document check. Recheck the invoice or quotation in the app.','Changes to Project Settings clear finance’s settings confirmation. Confirm the settings again in the app.','If another copy changes during a save, the app stops. Refresh and review before retrying; it never silently overwrites.','Files uploaded from your phone are saved in this event’s FINANCE folder: invoices, receipts and payment proof in Invoices and Receipts, quotations in Quotations. Reports go to Reports.','Final reports require a cost type and a checked invoice or vendor quotation for every vendor cost, a filled amount on every 12WIRED row, and confirmed billing settings.','The promoter report contains Summary, category sheets and Source Register only. Budgets, payables, payments and settings stay in this master.','Submission timing is supervised manually by the project head.','Pilot limit: 2,000 expenses per project, 15 MB per attachment, and 10 MB for an edited master workbook.','Anyone with the address can open the app page, but each person signs in with their own 12WIRED Dropbox account and sees only the FINANCE folders they are allowed to open. It requires internet access; it does not queue offline changes.'])guide.addRow([line]);
+ for(const line of ['12WIRED FINANCE PILOT','The master workbook is the project record. Supporting files are stored in this event’s FINANCE folder.','Blue file names are links: click one to open the file in Dropbox. The link opens only for people who can open this FINANCE folder. If a row has more than one file, the link opens the invoice; Source Register has a link for every file.','Edit the Expenses sheet for daily entries. Keep its headers, existing Expense IDs, and project/category names intact.','For new Excel rows, leave Expense ID blank; the app assigns one on the next save. Enter dates as YYYY-MM-DD.','Use numbers, not formulas, in Expenses and Project Settings. Category, Cost type and Tax treatment have dropdown lists; amount columns accept numbers only.','Cost type says how the cost was paid: Accounts payable, Company card (add the cardholder, e.g. Company card NY), Cash advance, LO payment recap, Direct receipt, Inventory, or 12WIRED.','Tax %: enter as a percentage, e.g. 2.5%. Tax adjustment is the amount in rupiah. For WHT gross-up, tax = base ÷ (1 − rate) − base, rounded to whole rupiah.','12WIRED rows are 12WIRED’s own manpower. Finance may leave their amounts blank; the project head fills them. They need no invoice, but the final report waits until each has a billable amount.','Edit only Expenses and Project Settings. Summary and category sheets are generated reports.','After editing Excel, save it and wait for Dropbox sync, then use Refresh from Dropbox in the app.','Changes to expense details clear their document check. Recheck the invoice or quotation in the app.','Changes to Project Settings clear finance’s settings confirmation. Confirm the settings again in the app.','If another copy changes during a save, the app stops. Refresh and review before retrying; it never silently overwrites.','Files uploaded from your phone are saved in this event’s FINANCE folder: invoices, receipts and payment proof in Invoices and Receipts, quotations in Quotations. Reports go to Reports.','Final reports require a cost type and a checked invoice or vendor quotation for every vendor cost, a filled amount on every 12WIRED row, and confirmed billing settings.','The promoter report contains Summary, category sheets and Source Register only. Budgets, payables, payments and settings stay in this master.','Submission timing is supervised manually by the project head.','Pilot limit: 2,000 expenses per project, 15 MB per attachment, and 10 MB for an edited master workbook.','Anyone with the address can open the app page, but each person signs in with their own 12WIRED Dropbox account and sees only the FINANCE folders they are allowed to open. It requires internet access; it does not queue offline changes.'])guide.addRow([line]);
  // Master only: report sheets get a note and an Excel lock without a password, so typing goes to Expenses.
  const note='Made by the app from the Expenses sheet. Type changes in Expenses, not here.';
  for(const c of CATEGORIES){const cell=categories[c].getCell('A2');cell.value=note;cell.font={italic:true,color:{argb:'FF625E79'}}}
